@@ -8,5 +8,7 @@
             "Pantheon\\SmartContentCdn\\": "src/"
         }
     },
-    "require": {}
+    "require": {
+        "pantheon-systems/pantheon-edge-integrations": "dev-master"
+    }
 }
