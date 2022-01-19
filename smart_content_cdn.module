@@ -1,0 +1,193 @@
+<?php
+
+/**
+ * @file
+ * Hook implementations for Smart CDN module.
+ */
+
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\StringTranslation\TranslatableMarkup;
+use Kalamuna\SmartCDN\HeaderData;
+
+/**
+ * Implements hook_block_view_BASE_BLOCK_ID_alter() for smart_content_decision_block().
+ */
+function smart_content_cdn_block_build_smart_content_decision_block_alter(&$build, $block) {
+  // Renderer for adding cacheable dependencies.
+  $renderer = \Drupal::service('renderer');
+
+  // Decision storage object.
+  $storage = $block->getDecisionStorage();
+
+  // Check if Decision exists.
+  if ($storage->hasDecision() && $storage->getDecision()->getSegmentSetStorage()->getPluginId() !== 'broken') {
+    $decision = $storage->getDecision();
+
+    if (!empty($decision)) {
+      // Get attached library settings.
+      $attached_settings = $decision->getAttachedSettings();
+
+      // Check Decision segments.
+      if (!empty($attached_settings['segments'])) {
+        foreach ($attached_settings['segments'] as $segment) {
+          $conditions = $segment['conditions']['group']['conditions'] ?? NULL;
+
+          // Check segment conditions.
+          if (!empty($conditions)) {
+            foreach ($conditions as $key => $condition) {
+              // Check if condition is a smart_cdn condition, if not skip.
+              if (!str_contains($key, 'smart_cdn:') || empty($condition['settings']['value'])) {
+                continue;
+              }
+
+              // Add cacheable dependency using block build and condition value.
+              $renderer->addCacheableDependency($build, $condition['settings']['value']);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_view().
+ */
+function smart_content_cdn_entity_view(&$build, EntityInterface $entity, $display, $view_mode) {
+  $config = \Drupal::configFactory()->get('smart_content_cdn.config');
+
+  // Assemble interest fields config key.
+  $interest_fields_key_parts = [ 'interest_fields' ];
+  if (!empty($entity->getEntityTypeId())) {
+    $interest_fields_key_parts[] =$entity->getEntityTypeId();
+  }
+  if (!empty($entity->bundle())) {
+    $interest_fields_key_parts[] =$entity->bundle();
+  }
+  // Get interest fields for entity type and bundle from config.
+  $interest_fields_key = implode('_', $interest_fields_key_parts);
+  $interest_fields = $config->get($interest_fields_key);
+
+  // Check if entity is a recipe node and has interest field.
+  $content_types = $config->get('subscription_content_types');
+  $content_types = array_values($content_types);
+
+  $interest_threshold = $config->get('interest_threshold');
+  $view_threshold = $config->get('subscriber_threshold');
+  $view_modes = ['full', 'teaser'];
+  if ($entity->getEntityTypeId() == 'node' && in_array($entity->bundle(), $content_types) && in_array($view_mode, $view_modes) && !empty($interest_fields)) {
+    $js_settings = [
+      'tags' => [],
+    ];
+    foreach ($interest_fields as $interest_field_name) {
+      // Check that given interest field is checked.
+      if (empty($interest_field_name)) {
+        continue;
+      }
+      if ($entity->hasField($interest_field_name)) {
+        // Get interest field.
+        $interest_field = $entity->get($interest_field_name)->getValue();
+        if (!empty($interest_field)) {
+          // Get array of interest tids.
+          $entity_tids = array_map(function($interest_field) {
+            return $interest_field['target_id'] ?? NULL;
+          }, $interest_field);
+
+          // Filter out any empty elements.
+          $entity_tids = array_filter($entity_tids);
+
+          // Settings to be passed to JS.
+          $js_settings['tags'] = array_merge($js_settings['tags'], $entity_tids);
+        }
+      }
+    }
+
+    $js_settings['interest_threshold'] = $interest_threshold;
+    $js_settings['view_threshold'] = $view_threshold;
+    // Attach libraries.
+    $build['#attached']['library'][] = 'smart_content_cdn/interest_count';
+    $build['#attached']['drupalSettings']['interest_count'] = $js_settings;
+
+  }
+}
+
+/**
+ * Implements hook_entity_view_mode_alter().
+ */
+function smart_content_cdn_entity_view_mode_alter(&$view_mode, Drupal\Core\Entity\EntityInterface $entity, $context) {
+  $config = \Drupal::configFactory()->get('smart_content_cdn.config');
+  $current_user = \Drupal::currentUser();
+  $roles = $current_user->getRoles();
+  if (in_array('administrator', $roles) || in_array('editor', $roles)) {
+    // Check if entity is a recipe node and has interest field.
+    $is_preview = $config->get('set_preview');
+  }
+  else {
+    $is_preview = FALSE;
+  }
+  $content_types = $config->get('subscription_content_types');
+  $content_types = array_values($content_types);
+  if ($entity->getEntityTypeId() == 'node' && $view_mode == 'full' && in_array($entity->bundle(), $content_types)) {
+    // Get header data.
+    $smart_content_cdn = new HeaderData();
+    $p_obj = $smart_content_cdn->returnPersonalizationObject();
+
+    // Add cacheable dependency using form and role header.
+    if (isset($p_obj['Role'])) {
+      $entity->addCacheableDependency($p_obj['Role']);
+    }
+    else {
+      $entity->addCacheableDependency('none');
+    }
+
+    // If user is already logged in or can see free content
+    if (!$is_preview && ((!empty($p_obj['Role']) && $p_obj['Role'] == 'anonymous'))) {
+      $view_mode = 'teaser';
+    }
+  }
+}
+
+/**
+ * Implements hook_preprocess_HOOK().
+ */
+function smart_content_cdn_preprocess_menu__account(&$variables) {
+  // Renderer for adding cacheable dependencies.
+  $renderer = \Drupal::service('renderer');
+
+  // Get role header.
+  $smart_content_cdn = new HeaderData();
+  $role = $smart_content_cdn->parseHeader('Role');
+
+  // Add cacheable dependency using menu and role.
+  $renderer->addCacheableDependency($variables, $role);
+}
+
+/**
+ * Implements hook_page_attachments().
+ */
+function smart_content_cdn_page_attachments(array &$attachments) {
+  $term_storage = \Drupal::entityTypeManager()->getStorage('taxonomy_term');
+
+  // Get header data.
+  $smart_content_cdn = new HeaderData();
+  $p_obj = $smart_content_cdn->returnPersonalizationObject();
+
+  // Add labels for interest terms to $p_obj.
+  if (!empty($p_obj['Interest'])) {
+    foreach ($p_obj['Interest'] as $tid) {
+      // Load taxonomy term by tid.
+      $term = $term_storage->load($tid);
+      if (!empty($term)) {
+        // Add label for taxonomy term.
+        $p_obj['InterestLabels'][] = strtolower($term->label());
+      }
+    }
+  }
+
+  // Set pObj to pass into JavaScript.
+  $js_settings['pObj'] = $p_obj;
+
+  // Attach libraries.
+  $attachments['#attached']['library'][] = 'smart_content_cdn/gtm_headers';
+  $attachments['#attached']['drupalSettings']['gtmHeaders'] = $js_settings;
+}
