@@ -1,5 +1,5 @@
 {
-    "name": "pantheon/smart_content_cdn",
+    "name": "pantheon-systems/smart_content_cdn",
     "description": "Edge Integrations for Drupal on Pantheon's platform.",
     "type": "drupal-module",
     "license": "MIT",
