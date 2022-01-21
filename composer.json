@@ -9,6 +9,6 @@
         }
     },
     "require": {
-        "pantheon-systems/pantheon-edge-integrations": "dev-master"
+        "pantheon-systems/pantheon-edge-integrations": "dev-composer-json-tweaks"
     }
 }
