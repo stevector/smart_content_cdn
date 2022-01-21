@@ -1,6 +1,6 @@
 {
     "name": "pantheon-systems/smart_content_cdn",
-    "description": "Edge Integrations for Drupal on Pantheon's platform.",
+    "description": "Connects Pantheon Edge Integrations to the Smart Content Ecosystem",
     "type": "drupal-module",
     "license": "MIT",
     "autoload": {
